@@ -192,7 +192,7 @@ export default function DoctorAvailability() {
         <div>
           <div className="h1">Doctor Availability Calendar</div>
           <div className="small">
-            {doctor.name} {doctor.department ? `- ${doctor.department}` : ""} {doctor.specialization ? `- ${doctor.specialization}` : ""}
+            {doctor.name} {doctor.department ? `- ${doctor.department}` : ""} {doctor.specialization ? `- ${doctor.specialization}` : ""} {doctor.qualification ? `- ${doctor.qualification}` : ""}
           </div>
         </div>
         <div className="row gap8">

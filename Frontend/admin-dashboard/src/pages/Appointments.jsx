@@ -69,6 +69,7 @@ export default function Appointments() {
   });
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState("");
+  const [deletingId, setDeletingId] = useState("");
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
@@ -330,6 +331,22 @@ export default function Appointments() {
     }
   }
 
+  async function deleteAppointment(appt) {
+    const label = appt.appointment_id || appt.id;
+    if (!window.confirm(`Permanently delete appointment ${label}? This cannot be undone.`)) return;
+    setDeletingId(appt.id);
+    setError("");
+    try {
+      await api.deleteAppointment(appt.id);
+      if (editAppointment?.id === appt.id) closeEditModal();
+      await loadAll();
+    } catch (err) {
+      setError(err.message || "Failed to delete appointment");
+    } finally {
+      setDeletingId("");
+    }
+  }
+
   if (loading) return <div className="card cardPad">Loading appointments...</div>;
   if (error) return <div className="card cardPad">{error}</div>;
 
@@ -410,6 +427,14 @@ export default function Appointments() {
                     <button className="btn" type="button" onClick={() => cancelAppointment(u)} disabled={String(u.status || "").toLowerCase() === "cancelled"}>
                       Cancel
                     </button>
+                    <button
+                      className="btn"
+                      type="button"
+                      onClick={() => deleteAppointment(u)}
+                      disabled={deletingId === u.id}
+                    >
+                      {deletingId === u.id ? "Deleting..." : "Delete"}
+                    </button>
                   </div>
                 </div>
               </div>
@@ -488,7 +513,7 @@ export default function Appointments() {
               <div className="mt16 apptWizardCol">
                 <label className="small">
                   Enter Patient ID
-                  <input className="input" value={oldPatientId} onChange={(e) => setOldPatientId(e.target.value)} placeholder="PAT-0001" />
+                  <input className="input" value={oldPatientId} onChange={(e) => setOldPatientId(e.target.value)} placeholder="PC1" />
                 </label>
                 {matchedOldPatient && (
                   <div className="small">

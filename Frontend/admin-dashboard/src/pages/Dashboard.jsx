@@ -3,6 +3,14 @@ import StatCard from "../components/StatCard";
 import ListCard from "../components/ListCard";
 import Badge from "../components/Badge";
 import { api, formatDateTime } from "../api/client";
+import {
+  CalendarCheck2,
+  CalendarDays,
+  Headphones,
+  PhoneCall,
+  ShieldCheck,
+  Stethoscope,
+} from "lucide-react";
 
 function statusVariant(status) {
   if (!status) return "gray";
@@ -76,25 +84,25 @@ export default function Dashboard() {
       title: "Total Appointments",
       value: String(data?.stats?.total_appointments ?? 0),
       subtitle: "From MongoDB",
-      icon: "APT",
+      icon: <CalendarCheck2 size={19} strokeWidth={2.3} aria-hidden="true" />,
     },
     {
       title: "Active Doctors",
       value: String(data?.stats?.active_doctors ?? 0),
       subtitle: "Currently available",
-      icon: "DR",
+      icon: <Stethoscope size={19} strokeWidth={2.3} aria-hidden="true" />,
     },
     {
       title: "Voice Calls Today",
       value: String(data?.stats?.calls_today ?? 0),
       subtitle: "Handled by AI",
-      icon: "CALL",
+      icon: <Headphones size={19} strokeWidth={2.3} aria-hidden="true" />,
     },
     {
       title: "System Status",
       value: String(data?.stats?.system_status ?? "Unknown"),
       subtitle: "Backend health",
-      icon: "SYS",
+      icon: <ShieldCheck size={19} strokeWidth={2.3} aria-hidden="true" />,
     },
   ];
 
@@ -110,7 +118,11 @@ export default function Dashboard() {
       </div>
 
       <div className="mt16 grid2">
-        <ListCard title="Upcoming Appointments" icon="APT" rightAction={<span className="small">Latest</span>}>
+        <ListCard
+          title="Upcoming Appointments"
+          icon={<CalendarDays size={17} strokeWidth={2.3} aria-hidden="true" />}
+          rightAction={<span className="small">Latest</span>}
+        >
           {upcoming.length === 0 ? (
             <div className="listRow">No appointments yet.</div>
           ) : (
@@ -131,7 +143,11 @@ export default function Dashboard() {
           )}
         </ListCard>
 
-        <ListCard title="Recent Voice Calls" icon="LOG" rightAction={<span className="small">Latest</span>}>
+        <ListCard
+          title="Recent Voice Calls"
+          icon={<PhoneCall size={17} strokeWidth={2.3} aria-hidden="true" />}
+          rightAction={<span className="small">Latest</span>}
+        >
           {(data?.recent_calls || []).length === 0 ? (
             <div className="listRow">No calls yet.</div>
           ) : (

@@ -1,36 +1,19 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from io import BytesIO
 from typing import Any
 import hashlib
 import re
 import secrets
 
 from bson import ObjectId
+from gridfs import GridFSBucket
+from gridfs.errors import NoFile
 from pymongo import MongoClient
 from pymongo.collection import Collection
 
 
-DEFAULT_DOCTORS = [
-    {
-        "name": "Dr. Ahmed",
-        "department": "Cardiology",
-        "specialization": "Heart Specialist",
-        "status": "Available",
-    },
-    {
-        "name": "Dr. Sana",
-        "department": "Dermatology",
-        "specialization": "Skin Specialist",
-        "status": "Available",
-    },
-    {
-        "name": "Dr. Ali",
-        "department": "General Physician",
-        "specialization": "General Medicine",
-        "status": "Busy",
-    },
-]
 WEEK_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 DAY_ORDER = {day: idx for idx, day in enumerate(WEEK_DAYS)}
 SLOT_PATTERN = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -47,9 +30,9 @@ class MongoStore:
         self.call_logs: Collection = self.db["call_logs"]
         self.sessions: Collection = self.db["sessions"]
         self.admin_users: Collection = self.db["admin_users"]
+        self.call_recordings = GridFSBucket(self.db, bucket_name="call_recordings")
 
         self._create_indexes()
-        self.seed_defaults()
         self._backfill_external_ids()
 
     @staticmethod
@@ -89,6 +72,13 @@ class MongoStore:
                 normalized.append({"day": day, "slots": sorted_slots})
         return normalized
 
+    @staticmethod
+    def _clean_optional_text(value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
     def _create_indexes(self):
         self.patients.create_index("patient_id", unique=True, sparse=True)
         self.patients.create_index("name")
@@ -96,37 +86,22 @@ class MongoStore:
 
         self.doctors.create_index("doctor_id", unique=True, sparse=True)
         self.doctors.create_index("name")
+        self.doctors.create_index("urdu_name")
         self.doctors.create_index("department")
+        self.doctors.create_index("qualification")
 
         self.doctor_availability.create_index("doctor_id", unique=True)
         self.appointments.create_index("appointment_id", unique=True, sparse=True)
         self.appointments.create_index("scheduled_for")
         self.appointments.create_index("patient_id")
         self.appointments.create_index("doctor_id")
+        self.appointments.create_index("source_session_id", unique=True, sparse=True)
 
         self.call_logs.create_index("created_at")
         self.call_logs.create_index("session_id")
         self.sessions.create_index("session_id", unique=True)
 
         self.admin_users.create_index("username", unique=True)
-
-    def seed_defaults(self):
-        if self.doctors.count_documents({}) == 0:
-            now = self._now()
-            docs = []
-            for doctor in DEFAULT_DOCTORS:
-                docs.append(
-                    {
-                        **doctor,
-                        "doctor_id": self._next_doctor_id(),
-                        "created_at": now,
-                        "updated_at": now,
-                    }
-                )
-            if docs:
-                self.doctors.insert_many(docs)
-                for doctor in docs:
-                    self._set_doctor_availability(doctor["doctor_id"], [])
 
     def _backfill_external_ids(self):
         patient_id_by_oid: dict[str, str] = {}
@@ -141,9 +116,18 @@ class MongoStore:
 
         for doctor in self.doctors.find({}):
             did = doctor.get("doctor_id")
+            doctor_updates: dict[str, Any] = {}
             if not did:
                 did = self._next_doctor_id()
-                self.doctors.update_one({"_id": doctor["_id"]}, {"$set": {"doctor_id": did}})
+                doctor_updates["doctor_id"] = did
+            if "specialization" not in doctor:
+                doctor_updates["specialization"] = None
+            if "urdu_name" not in doctor:
+                doctor_updates["urdu_name"] = None
+            if "qualification" not in doctor:
+                doctor_updates["qualification"] = None
+            if doctor_updates:
+                self.doctors.update_one({"_id": doctor["_id"]}, {"$set": doctor_updates})
             doctor_id_by_oid[str(doctor["_id"])] = did
             if self.doctor_availability.count_documents({"doctor_id": did}) == 0:
                 self._set_doctor_availability(did, doctor.get("availability"))
@@ -171,20 +155,20 @@ class MongoStore:
             if updates:
                 self.call_logs.update_one({"_id": log["_id"]}, {"$set": updates})
 
-    def _next_prefixed_id(self, *, collection: Collection, field: str, prefix: str, width: int = 4) -> str:
+    def _next_prefixed_id(self, *, collection: Collection, field: str, prefix: str) -> str:
         max_num = 0
-        pattern = re.compile(rf"^{re.escape(prefix)}-(\d+)$")
-        for doc in collection.find({field: {"$regex": f"^{prefix}-"}}):
+        pattern = re.compile(rf"^{re.escape(prefix)}(\d+)$")
+        for doc in collection.find({field: {"$regex": rf"^{re.escape(prefix)}\d+$"}}):
             match = pattern.match(str(doc.get(field) or ""))
             if match:
                 max_num = max(max_num, int(match.group(1)))
-        return f"{prefix}-{max_num + 1:0{width}d}"
+        return f"{prefix}{max_num + 1}"
 
     def _next_patient_id(self) -> str:
-        return self._next_prefixed_id(collection=self.patients, field="patient_id", prefix="PAT")
+        return self._next_prefixed_id(collection=self.patients, field="patient_id", prefix="PC")
 
     def _next_doctor_id(self) -> str:
-        return self._next_prefixed_id(collection=self.doctors, field="doctor_id", prefix="DOC")
+        return self._next_prefixed_id(collection=self.doctors, field="doctor_id", prefix="DC")
 
     def _next_appointment_id(self) -> str:
         return self._next_prefixed_id(collection=self.appointments, field="appointment_id", prefix="APT")
@@ -209,6 +193,15 @@ class MongoStore:
         out = dict(doc)
         if "_id" in out:
             out["id"] = str(out.pop("_id"))
+        return out
+
+    @staticmethod
+    def _serialize_call_log(doc: dict[str, Any]) -> dict[str, Any]:
+        out = dict(doc)
+        if "_id" in out:
+            out["id"] = str(out.pop("_id"))
+        if isinstance(out.get("recording_file_id"), ObjectId):
+            out["recording_file_id"] = str(out["recording_file_id"])
         return out
 
     def _availability_map(self) -> dict[str, list[dict[str, Any]]]:
@@ -265,7 +258,49 @@ class MongoStore:
             session["id"] = str(session.pop("_id"))
         return session
 
+    def update_session_state(
+        self,
+        session_id: str,
+        *,
+        active_intent: str | None,
+        last_intent: str,
+        awaiting_final_confirmation: bool,
+        entities: dict[str, Any],
+        missing_fields: list[str],
+    ):
+        self.sessions.update_one(
+            {"session_id": session_id},
+            {
+                "$set": {
+                    "state.active_intent": active_intent,
+                    "state.last_intent": last_intent,
+                    "state.awaiting_final_confirmation": awaiting_final_confirmation,
+                    "state.entities": entities,
+                    "state.missing_fields": missing_fields,
+                    "updated_at": self._now(),
+                },
+                "$setOnInsert": {"created_at": self._now()},
+            },
+            upsert=True,
+        )
+
+    def complete_session(self, session_id: str):
+        now = self._now()
+        self.sessions.update_one(
+            {"session_id": session_id},
+            {"$set": {"status": "Completed", "completed_at": now, "updated_at": now}},
+        )
+        self.call_logs.update_one(
+            {"session_id": session_id},
+            {"$set": {"status": "Completed", "completed_at": now, "updated_at": now}},
+        )
+
     def _resolve_patient(self, entities: dict[str, Any]) -> str | None:
+        provided_patient_id = str(entities.get("patient_id") or "").strip().upper()
+        if provided_patient_id:
+            patient = self.patients.find_one({"patient_id": provided_patient_id})
+            return patient.get("patient_id") if patient else None
+
         patient_name = entities.get("patient_name")
         phone = entities.get("phone")
         if not patient_name and not phone:
@@ -303,21 +338,36 @@ class MongoStore:
         return patient_id
 
     def _resolve_doctor(self, entities: dict[str, Any]) -> str | None:
-        doctor_name = entities.get("doctor_name")
-        department = entities.get("department")
-        if not doctor_name and not department:
+        doctor_id = str(entities.get("doctor_id") or "").strip()
+        if doctor_id:
+            doctor = self.doctors.find_one({"doctor_id": doctor_id})
+            if doctor:
+                return doctor.get("doctor_id")
+
+        doctor_name = str(entities.get("doctor_name") or "").strip()
+        if not doctor_name:
             return None
 
-        query: dict[str, Any] = {}
-        if doctor_name:
-            query["name"] = {"$regex": f"^{doctor_name}$", "$options": "i"}
+        query: dict[str, Any] = {
+            "name": {"$regex": f"^{re.escape(doctor_name)}$", "$options": "i"}
+        }
+        department = str(entities.get("department") or "").strip()
         if department:
-            query["department"] = {"$regex": f"^{department}$", "$options": "i"}
+            query["department"] = {
+                "$regex": f"^{re.escape(department)}$",
+                "$options": "i",
+            }
 
         doctor = self.doctors.find_one(query)
         if doctor:
             return doctor.get("doctor_id")
         return None
+
+    @staticmethod
+    def _extract_appointment_date_and_slot(entities: dict[str, Any]) -> tuple[str | None, str | None]:
+        date = str(entities.get("date") or "").strip()
+        slot = str(entities.get("time") or "").strip()
+        return (date or None), (slot or None)
 
     @staticmethod
     def _parse_scheduled_for(entities: dict[str, Any]) -> str | None:
@@ -359,19 +409,35 @@ class MongoStore:
         entities: dict[str, Any],
         patient_id: str | None,
         doctor_id: str | None,
+        session_id: str | None = None,
     ) -> str | None:
         now = self._now()
         appointment_id = entities.get("appointment_id")
 
         if intent_name == "book_appointment":
+            if session_id:
+                existing_booking = self.appointments.find_one(
+                    {"source_session_id": session_id}
+                )
+                if existing_booking:
+                    return str(existing_booking["_id"])
+            appointment_date, slot = self._extract_appointment_date_and_slot(entities)
+            if not doctor_id or not appointment_date or not slot:
+                return None
+            doctor, scheduled_for = self._validate_doctor_slot(
+                doctor_id=doctor_id,
+                appointment_date=appointment_date,
+                slot=slot,
+            )
             document = {
                 "appointment_id": appointment_id or self._next_appointment_id(),
                 "patient_id": patient_id,
                 "doctor_id": doctor_id,
-                "department": entities.get("department"),
-                "scheduled_for": self._parse_scheduled_for(entities),
+                "department": doctor.get("department"),
+                "scheduled_for": scheduled_for,
                 "reason": entities.get("reason"),
-                "status": "Pending",
+                "status": "Booked",
+                **({"source_session_id": session_id} if session_id else {}),
                 "created_at": now,
                 "updated_at": now,
             }
@@ -388,9 +454,21 @@ class MongoStore:
 
             updates: dict[str, Any] = {"updated_at": now}
             if intent_name == "reschedule_appointment":
-                updates["scheduled_for"] = self._parse_scheduled_for(entities)
+                appointment_date, slot = self._extract_appointment_date_and_slot(entities)
+                if not appointment_date or not slot or not appt.get("doctor_id"):
+                    return None
+                doctor, scheduled_for = self._validate_doctor_slot(
+                    doctor_id=appt.get("doctor_id"),
+                    appointment_date=appointment_date,
+                    slot=slot,
+                    exclude_id=str(appt["_id"]),
+                )
+                updates["department"] = doctor.get("department")
+                updates["scheduled_for"] = scheduled_for
                 updates["status"] = "Rescheduled"
             else:
+                if str(appt.get("status") or "").lower() == "cancelled":
+                    return str(appt["_id"])
                 updates["status"] = "Cancelled"
             self.appointments.update_one({"_id": appt["_id"]}, {"$set": updates})
             return str(appt["_id"])
@@ -407,27 +485,81 @@ class MongoStore:
         entities: dict[str, Any],
         assistant_text: str,
         audio_mime: str | None,
+        persist_appointment: bool = True,
     ):
-        patient_id = self._resolve_patient(entities)
         doctor_id = self._resolve_doctor(entities)
-        appointment_id = self._handle_appointment(intent_name, entities, patient_id, doctor_id)
+        patient_id = None
+        appointment_id = None
+
+        # A patient is a committed booking record, not a partial conversation
+        # record. Never create one while the agent is still collecting or
+        # clarifying fields. Also reuse an already committed booking for this
+        # session before resolving the patient, so retries cannot create a
+        # second patient with a differently transcribed phone number.
+        if persist_appointment:
+            existing_booking = (
+                self.appointments.find_one({"source_session_id": session_id})
+                if intent_name == "book_appointment" and session_id
+                else None
+            )
+            if existing_booking:
+                patient_id = existing_booking.get("patient_id")
+                doctor_id = existing_booking.get("doctor_id") or doctor_id
+                appointment_id = str(existing_booking["_id"])
+            else:
+                if intent_name == "book_appointment":
+                    patient_id = self._resolve_patient(entities)
+                appointment_id = self._handle_appointment(
+                    intent_name,
+                    entities,
+                    patient_id,
+                    doctor_id,
+                    session_id=session_id,
+                )
 
         now = self._now()
-        self.call_logs.insert_one(
+        turn = {
+            "transcript": transcript,
+            "assistant_text": assistant_text,
+            "intent": intent_name,
+            "confidence": confidence,
+            "entities": entities,
+            "created_at": now,
+        }
+        latest_fields = {
+            "session_id": session_id,
+            # These top-level fields are the accumulated/latest view used by
+            # the existing dashboard. The full exchange is retained in turns.
+            "transcript": "\n".join(
+                item.get("content", "")
+                for item in self.get_session(session_id).get("history", [])
+                if item.get("role") == "user"
+            ),
+            "assistant_text": assistant_text,
+            "intent": intent_name,
+            "confidence": confidence,
+            "entities": entities,
+            "audio_mime": audio_mime,
+            "status": "In Progress",
+            "updated_at": now,
+        }
+        # Do not erase committed references on a later non-booking turn (for
+        # example, when the caller says goodbye after the booking).
+        if patient_id is not None:
+            latest_fields["patient_id"] = patient_id
+        if doctor_id is not None:
+            latest_fields["doctor_id"] = doctor_id
+        if appointment_id is not None:
+            latest_fields["appointment_id_ref"] = appointment_id
+
+        self.call_logs.update_one(
+            {"session_id": session_id},
             {
-                "session_id": session_id,
-                "transcript": transcript,
-                "assistant_text": assistant_text,
-                "intent": intent_name,
-                "confidence": confidence,
-                "entities": entities,
-                "patient_id": patient_id,
-                "doctor_id": doctor_id,
-                "appointment_id_ref": appointment_id,
-                "audio_mime": audio_mime,
-                "status": "Completed",
-                "created_at": now,
-            }
+                "$set": latest_fields,
+                "$setOnInsert": {"created_at": now},
+                "$push": {"turns": turn},
+            },
+            upsert=True,
         )
 
     def get_doctors(self) -> list[dict[str, Any]]:
@@ -453,8 +585,10 @@ class MongoStore:
         doc = {
             "doctor_id": doctor_id,
             "name": payload["name"].strip(),
-            "department": payload.get("department"),
-            "specialization": payload.get("specialization"),
+            "urdu_name": self._clean_optional_text(payload.get("urdu_name")),
+            "department": self._clean_optional_text(payload.get("department")),
+            "specialization": self._clean_optional_text(payload.get("specialization")),
+            "qualification": self._clean_optional_text(payload.get("qualification")),
             "status": payload.get("status") or "Available",
             "created_at": now,
             "updated_at": now,
@@ -469,9 +603,11 @@ class MongoStore:
             return None
 
         update_fields: dict[str, Any] = {"updated_at": self._now()}
-        for key in ["name", "department", "specialization", "status"]:
+        for key in ["name", "urdu_name", "department", "specialization", "qualification", "status"]:
             if key in payload and payload[key] is not None:
-                value = payload[key].strip() if isinstance(payload[key], str) else payload[key]
+                value = payload[key].strip() if key in {"name", "status"} and isinstance(payload[key], str) else payload[key]
+                if key in {"urdu_name", "department", "specialization", "qualification"}:
+                    value = self._clean_optional_text(payload[key])
                 update_fields[key] = value
 
         self.doctors.update_one({"doctor_id": doctor_id}, {"$set": update_fields})
@@ -676,6 +812,18 @@ class MongoStore:
         updated = self.appointments.find_one({"_id": oid})
         return self._serialize_appointment(updated or {})
 
+    def delete_appointment(self, appointment_identifier: str) -> bool:
+        identifier = str(appointment_identifier or "").strip()
+        if not identifier:
+            return False
+        query: dict[str, Any]
+        if ObjectId.is_valid(identifier):
+            query = {"_id": ObjectId(identifier)}
+        else:
+            query = {"appointment_id": identifier.upper()}
+        deleted = self.appointments.delete_one(query)
+        return deleted.deleted_count > 0
+
     def update_appointment(self, appt_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
         if not ObjectId.is_valid(appt_id):
             return None
@@ -725,12 +873,79 @@ class MongoStore:
 
     def get_call_logs(self, limit: int = 100) -> list[dict[str, Any]]:
         docs = list(self.call_logs.find({}).sort("created_at", -1).limit(limit))
-        out: list[dict[str, Any]] = []
-        for doc in docs:
-            if "_id" in doc:
-                doc["id"] = str(doc.pop("_id"))
-            out.append(doc)
-        return out
+        return [self._serialize_call_log(doc) for doc in docs]
+
+    def save_call_recording(
+        self,
+        *,
+        session_id: str,
+        audio_bytes: bytes,
+        content_type: str,
+        filename: str,
+        duration_seconds: float | None = None,
+    ) -> str:
+        if not audio_bytes:
+            raise ValueError("Call recording is empty.")
+
+        existing = self.call_logs.find_one(
+            {"session_id": session_id},
+            {"recording_file_id": 1},
+        )
+        if not existing:
+            raise ValueError("Call session was not found.")
+        previous_file_id = (existing or {}).get("recording_file_id")
+        file_id = self.call_recordings.upload_from_stream(
+            filename or f"{session_id}.webm",
+            BytesIO(audio_bytes),
+            metadata={
+                "session_id": session_id,
+                "content_type": content_type or "audio/webm",
+            },
+        )
+        self.call_logs.update_one(
+            {"session_id": session_id},
+            {
+                "$set": {
+                    "recording_file_id": file_id,
+                    "recording_mime": content_type or "audio/webm",
+                    "recording_size": len(audio_bytes),
+                    **(
+                        {"recording_duration_seconds": round(float(duration_seconds), 3)}
+                        if duration_seconds is not None and duration_seconds > 0
+                        else {}
+                    ),
+                    "updated_at": self._now(),
+                }
+            },
+            upsert=False,
+        )
+
+        if previous_file_id and previous_file_id != file_id:
+            try:
+                self.call_recordings.delete(previous_file_id)
+            except NoFile:
+                pass
+        return str(file_id)
+
+    def open_call_recording(self, session_id: str):
+        call_log = self.call_logs.find_one(
+            {"session_id": session_id},
+            {"recording_file_id": 1, "recording_mime": 1},
+        )
+        file_id = (call_log or {}).get("recording_file_id")
+        if not file_id:
+            return None
+        try:
+            stream = self.call_recordings.open_download_stream(file_id)
+        except NoFile:
+            return None
+        metadata = stream.metadata or {}
+        mime = (
+            (call_log or {}).get("recording_mime")
+            or metadata.get("content_type")
+            or "audio/webm"
+        )
+        return stream, mime
 
     def get_dashboard_summary(self) -> dict[str, Any]:
         total_appointments = self.appointments.count_documents({})
@@ -785,6 +1000,17 @@ class MongoStore:
     def _hash_password(password: str, salt: str) -> str:
         return hashlib.sha256(f"{salt}:{password}".encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _public_admin(user: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "admin_id": user.get("admin_id"),
+            "name": user.get("name"),
+            "username": user.get("username"),
+            "profile_picture": user.get("profile_picture"),
+            "created_at": user.get("created_at"),
+            "updated_at": user.get("updated_at"),
+        }
+
     def create_admin_user(self, *, name: str, username: str, password: str) -> dict[str, Any]:
         now = self._now()
         salt = secrets.token_hex(16)
@@ -800,7 +1026,57 @@ class MongoStore:
             "updated_at": now,
         }
         self.admin_users.insert_one(doc)
-        return {"admin_id": admin_id, "name": doc["name"], "username": doc["username"]}
+        return self._public_admin(doc)
+
+    def get_admin_user(self, *, username: str) -> dict[str, Any] | None:
+        user = self.admin_users.find_one({"username": username.strip().lower()})
+        return self._public_admin(user) if user else None
+
+    def update_admin_user(
+        self,
+        *,
+        current_username: str,
+        name: str,
+        username: str,
+    ) -> dict[str, Any] | None:
+        current = self.admin_users.find_one(
+            {"username": current_username.strip().lower()}
+        )
+        if not current:
+            return None
+        self.admin_users.update_one(
+            {"_id": current["_id"]},
+            {
+                "$set": {
+                    "name": name.strip(),
+                    "username": username.strip().lower(),
+                    "updated_at": self._now(),
+                }
+            },
+        )
+        updated = self.admin_users.find_one({"_id": current["_id"]})
+        return self._public_admin(updated or current)
+
+    def set_admin_profile_picture(
+        self,
+        *,
+        username: str,
+        profile_picture: str,
+    ) -> dict[str, Any] | None:
+        user = self.admin_users.find_one({"username": username.strip().lower()})
+        if not user:
+            return None
+        self.admin_users.update_one(
+            {"_id": user["_id"]},
+            {
+                "$set": {
+                    "profile_picture": profile_picture,
+                    "updated_at": self._now(),
+                }
+            },
+        )
+        updated = self.admin_users.find_one({"_id": user["_id"]})
+        return self._public_admin(updated or user)
 
     def authenticate_admin(self, *, username: str, password: str) -> dict[str, Any] | None:
         user = self.admin_users.find_one({"username": username.strip().lower()})
@@ -812,7 +1088,7 @@ class MongoStore:
             return None
         if self._hash_password(password, salt) != expected:
             return None
-        return {"admin_id": user.get("admin_id"), "name": user.get("name"), "username": user.get("username")}
+        return self._public_admin(user)
 
     def reset_admin_password(self, *, username: str, new_password: str) -> bool:
         user = self.admin_users.find_one({"username": username.strip().lower()})

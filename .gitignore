@@ -1,0 +1,7 @@
+.mongodb-data/
+.mongodb-log/
+.mongodb-recovered-data/
+.database-backups/
+
+# Local speech-recognition model files are too large for GitHub.
+ASR/

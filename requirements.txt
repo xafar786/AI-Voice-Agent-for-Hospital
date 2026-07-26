@@ -4,3 +4,9 @@ python-multipart
 python-dotenv
 pymongo
 pydantic
+requests
+openai
+torch
+transformers
+safetensors
+tzdata

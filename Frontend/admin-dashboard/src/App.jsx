@@ -8,7 +8,8 @@ import Appointments from "./pages/Appointments";
 import Patients from "./pages/Patients";
 import CallLogs from "./pages/CallLogs";
 import SystemMonitoring from "./pages/SystemMonitoring";
-import VoiceAgent from "./pages/VoiceAgent";
+import ModuleSelector from "./pages/ModuleSelector";
+import PatientVoiceAgent from "./pages/PatientVoiceAgent";
 import DoctorAvailability from "./pages/DoctorAvailability";
 import Login from "./pages/Login";
 
@@ -19,10 +20,17 @@ function ProtectedLayout() {
   return <AdminLayout />;
 }
 
+function AdminEntry() {
+  return <Navigate to={isAuthenticated() ? "/dashboard" : "/login"} replace />;
+}
+
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<Navigate to={isAuthenticated() ? "/dashboard" : "/login"} replace />} />
+      <Route path="/" element={<ModuleSelector />} />
+      <Route path="/patient/voice-agent" element={<PatientVoiceAgent />} />
+      <Route path="/voice-agent" element={<Navigate to="/patient/voice-agent" replace />} />
+      <Route path="/admin" element={<AdminEntry />} />
       <Route path="/login" element={<Login />} />
 
       <Route element={<ProtectedLayout />}>
@@ -33,8 +41,8 @@ export default function App() {
         <Route path="/patients" element={<Patients />} />
         <Route path="/call-logs" element={<CallLogs />} />
         <Route path="/system-monitoring" element={<SystemMonitoring />} />
-        <Route path="/voice-agent" element={<VoiceAgent />} />
       </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }

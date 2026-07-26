@@ -2,6 +2,13 @@ import { useEffect, useState } from "react";
 import Badge from "../components/Badge";
 import { api } from "../api/client";
 
+function statusVariant(status) {
+  const value = String(status || "").toLowerCase();
+  if (value === "active") return "green";
+  if (value === "ready") return "yellow";
+  return "red";
+}
+
 export default function SystemMonitoring() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -44,8 +51,9 @@ export default function SystemMonitoring() {
           <div key={s.name} className="card cardPad sysCard">
             <div className="spread">
               <div className="sysCardTitle">{s.name}</div>
-              <Badge variant={s.status === "Active" ? "green" : "red"}>{s.status}</Badge>
+              <Badge variant={statusVariant(s.status)}>{s.status}</Badge>
             </div>
+            {s.detail && <div className="small mt12">{s.detail}</div>}
           </div>
         ))}
       </div>

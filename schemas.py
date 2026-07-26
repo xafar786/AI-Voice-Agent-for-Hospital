@@ -7,6 +7,7 @@ IntentName = Literal[
     "cancel_appointment",
     "check_availability",
     "list_doctors",
+    "end_conversation",
     "greeting",
     "other"
 ]
@@ -19,6 +20,15 @@ class IntentResult(BaseModel):
 class TurnResponse(BaseModel):
     transcript: str
     intent: IntentResult
+    assistant_text: str
+    needs_clarification: bool = False
+    missing_fields: list[str] = Field(default_factory=list)
+    conversation_ended: bool = False
+    tts_audio_base64: Optional[str] = None
+    audio_mime: Optional[str] = "audio/mpeg"
+
+
+class GreetingResponse(BaseModel):
     assistant_text: str
     tts_audio_base64: Optional[str] = None
     audio_mime: Optional[str] = "audio/mpeg"
