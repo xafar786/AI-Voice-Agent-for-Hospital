@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Camera, KeyRound, Pencil, UserRound, X } from "lucide-react";
-import { api } from "../api/client";
+import { api, formatDateTime } from "../api/client";
 import { clearCurrentUser, getCurrentUser, setCurrentUser } from "../auth";
 import { getPasswordRules, USERNAME_PATTERN } from "../authRules";
 
@@ -10,9 +10,7 @@ function toLower(value) {
 }
 
 function formatProfileDate(value) {
-  if (!value) return "Not available";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+  return value ? formatDateTime(value) : "Not available";
 }
 
 export default function Header() {

@@ -983,4 +983,5 @@ def to_call_log_view(log: dict[str, Any]) -> dict[str, Any]:
         "recording_duration_seconds": log.get("recording_duration_seconds"),
         "status": log.get("status", "Completed"),
         "created_at": log.get("created_at"),
+        "updated_at": log.get("updated_at"),
     }

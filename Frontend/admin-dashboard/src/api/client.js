@@ -1,4 +1,5 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8001";
+export const PAKISTAN_TIME_ZONE = "Asia/Karachi";
 
 async function request(path, options = {}) {
   const isFormData = options.body instanceof FormData;
@@ -93,5 +94,40 @@ export function formatDateTime(dateValue) {
   if (!dateValue) return "-";
   const date = new Date(dateValue);
   if (Number.isNaN(date.getTime())) return String(dateValue);
-  return date.toLocaleString();
+  return date.toLocaleString("en-PK", {
+    timeZone: PAKISTAN_TIME_ZONE,
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+export function formatPakistanTime(dateValue = new Date()) {
+  const date = dateValue instanceof Date ? dateValue : new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString("en-PK", {
+    timeZone: PAKISTAN_TIME_ZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+export function getPakistanDateKey(dateValue = new Date()) {
+  const date = dateValue instanceof Date ? dateValue : new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: PAKISTAN_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const values = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  return `${values.year}-${values.month}-${values.day}`;
 }

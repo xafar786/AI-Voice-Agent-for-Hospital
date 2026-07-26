@@ -2,7 +2,12 @@ import { useEffect, useState } from "react";
 import StatCard from "../components/StatCard";
 import ListCard from "../components/ListCard";
 import Badge from "../components/Badge";
-import { api, formatDateTime } from "../api/client";
+import {
+  api,
+  formatDateTime,
+  formatPakistanTime,
+  getPakistanDateKey,
+} from "../api/client";
 import {
   CalendarCheck2,
   CalendarDays,
@@ -11,6 +16,8 @@ import {
   ShieldCheck,
   Stethoscope,
 } from "lucide-react";
+
+const DASHBOARD_REFRESH_MS = 10_000;
 
 function statusVariant(status) {
   if (!status) return "gray";
@@ -21,63 +28,79 @@ function statusVariant(status) {
   return "blue";
 }
 
-function parseScheduledDate(value) {
-  if (!value) return null;
+function scheduledDateKey(value) {
+  if (!value) return "";
   const raw = String(value).trim();
   const first = raw.split(" ")[0];
-  const isoDateOnly = /^\d{4}-\d{2}-\d{2}$/;
-  if (isoDateOnly.test(first)) {
-    const dt = new Date(`${first}T00:00:00`);
-    if (!Number.isNaN(dt.getTime())) return dt;
-  }
-  const parsed = new Date(raw);
-  if (!Number.isNaN(parsed.getTime())) return parsed;
-  return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(first)) return first;
+  return getPakistanDateKey(raw);
 }
 
 export default function Dashboard() {
   const [data, setData] = useState(null);
   const [upcoming, setUpcoming] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
     let active = true;
-    Promise.all([api.getDashboardSummary(), api.getAppointments()])
-      .then(([summary, appointments]) => {
+    let requestInFlight = false;
+
+    const refreshDashboard = async (initialLoad = false) => {
+      if (requestInFlight) return;
+      requestInFlight = true;
+      if (!initialLoad) setRefreshing(true);
+
+      try {
+        const [summary, appointments] = await Promise.all([
+          api.getDashboardSummary(),
+          api.getAppointments(),
+        ]);
         if (!active) return;
         setData(summary);
 
-        const now = new Date();
-        const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+        const todayKey = getPakistanDateKey();
         const todayRows = (appointments || [])
           .filter((row) => String(row.status || "").toLowerCase() !== "cancelled")
-          .filter((row) => {
-            const dt = parseScheduledDate(row.scheduled_for);
-            if (!dt) return false;
-            const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-            return key === todayKey;
-          })
+          .filter((row) => scheduledDateKey(row.scheduled_for) === todayKey)
           .sort((a, b) => String(a.scheduled_for || "").localeCompare(String(b.scheduled_for || "")))
           .slice(0, 6);
         setUpcoming(todayRows);
-      })
-      .catch((err) => {
+        setLastUpdated(new Date());
+        setError("");
+      } catch (err) {
         if (!active) return;
         setError(err.message || "Failed to load dashboard");
-      })
-      .finally(() => {
-        if (!active) return;
-        setLoading(false);
-      });
+      } finally {
+        requestInFlight = false;
+        if (active) {
+          if (initialLoad) setLoading(false);
+          setRefreshing(false);
+        }
+      }
+    };
+
+    refreshDashboard(true);
+    const refreshTimer = window.setInterval(refreshDashboard, DASHBOARD_REFRESH_MS);
+    const refreshOnFocus = () => refreshDashboard();
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refreshDashboard();
+    };
+    window.addEventListener("focus", refreshOnFocus);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
 
     return () => {
       active = false;
+      window.clearInterval(refreshTimer);
+      window.removeEventListener("focus", refreshOnFocus);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
   }, []);
 
   if (loading) return <div className="card cardPad">Loading dashboard...</div>;
-  if (error) return <div className="card cardPad">{error}</div>;
+  if (error && !data) return <div className="card cardPad">{error}</div>;
 
   const stats = [
     {
@@ -109,7 +132,19 @@ export default function Dashboard() {
   return (
     <div>
       <div className="h1">Dashboard Overview</div>
-      <div className="small">Live data from backend and MongoDB.</div>
+      <div className="small">
+        Live data from backend and MongoDB.{" "}
+        {refreshing
+          ? "Refreshing..."
+          : lastUpdated
+            ? `Updated ${formatPakistanTime(lastUpdated)}`
+            : ""}
+      </div>
+      {error ? (
+        <div className="small mt8" role="status">
+          Refresh failed: {error}. Showing the last successful update.
+        </div>
+      ) : null}
 
       <div className="mt16 grid4">
         {stats.map((s) => (
@@ -146,7 +181,7 @@ export default function Dashboard() {
         <ListCard
           title="Recent Voice Calls"
           icon={<PhoneCall size={17} strokeWidth={2.3} aria-hidden="true" />}
-          rightAction={<span className="small">Latest</span>}
+          rightAction={<span className="small">{refreshing ? "Updating..." : "Auto-updates"}</span>}
         >
           {(data?.recent_calls || []).length === 0 ? (
             <div className="listRow">No calls yet.</div>
@@ -154,11 +189,11 @@ export default function Dashboard() {
             (data?.recent_calls || []).map((c) => (
               <div key={c.id} className="listRow">
                 <div>
-                  <div className="listMain">{c.entities?.patient_name || "Unknown Caller"}</div>
+                  <div className="listMain">{c.patient_name || "Unknown Caller"}</div>
                   <div className="listSub">Intent: {c.intent || "other"}</div>
                 </div>
                 <div style={{ textAlign: "right" }}>
-                  <div className="listMain">{formatDateTime(c.created_at)}</div>
+                  <div className="listMain">{formatDateTime(c.updated_at || c.created_at)}</div>
                   <div className="listSub">{(c.confidence || 0).toFixed(2)}</div>
                 </div>
               </div>

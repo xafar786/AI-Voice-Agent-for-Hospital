@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, formatDateTime } from "../api/client";
+import {
+  api,
+  formatDateTime,
+  formatPakistanTime,
+  getPakistanDateKey,
+} from "../api/client";
 
 function StatMini({ title, value, note }) {
   return (
@@ -49,11 +54,10 @@ export default function CallLogs() {
 
   const topStats = useMemo(() => {
     const total = calls.length;
-    const today = new Date().toDateString();
-    const todayCalls = calls.filter((call) => {
-      const createdAt = new Date(call.created_at);
-      return !Number.isNaN(createdAt.getTime()) && createdAt.toDateString() === today;
-    }).length;
+    const today = getPakistanDateKey();
+    const todayCalls = calls.filter(
+      (call) => getPakistanDateKey(call.created_at) === today,
+    ).length;
     const recordings = calls.filter((call) => call.has_recording).length;
     const messages = calls.reduce((sum, call) => sum + callMessageCount(call), 0);
     return [
@@ -239,10 +243,7 @@ function getConversationMessages(call) {
 }
 
 function formatMessageTime(value) {
-  if (!value) return "";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return "";
-  return parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return value ? formatPakistanTime(value) : "";
 }
 
 function formatAudioTime(value) {

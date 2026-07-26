@@ -254,7 +254,11 @@ def complete_session(session_id: str):
 
 @app.get("/dashboard/summary")
 def dashboard_summary():
-    return store.get_dashboard_summary()
+    summary = store.get_dashboard_summary()
+    summary["recent_calls"] = [
+        to_call_log_view(log) for log in summary.get("recent_calls", [])
+    ]
+    return summary
 
 
 @app.get("/doctors")

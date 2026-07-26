@@ -13,6 +13,8 @@ from gridfs.errors import NoFile
 from pymongo import MongoClient
 from pymongo.collection import Collection
 
+from domain.timezone_utils import pakistan_day_utc_bounds, pakistan_today
+
 
 WEEK_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 DAY_ORDER = {day: idx for idx, day in enumerate(WEEK_DAYS)}
@@ -21,7 +23,9 @@ SLOT_PATTERN = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 class MongoStore:
     def __init__(self, uri: str, db_name: str):
-        self.client = MongoClient(uri)
+        # MongoDB stores datetimes in UTC. Returning timezone-aware values keeps
+        # the UTC offset in API responses so clients can convert them to PKT.
+        self.client = MongoClient(uri, tz_aware=True)
         self.db = self.client[db_name]
         self.patients: Collection = self.db["patients"]
         self.doctors: Collection = self.db["doctors"]
@@ -98,6 +102,7 @@ class MongoStore:
         self.appointments.create_index("source_session_id", unique=True, sparse=True)
 
         self.call_logs.create_index("created_at")
+        self.call_logs.create_index("updated_at")
         self.call_logs.create_index("session_id")
         self.sessions.create_index("session_id", unique=True)
 
@@ -872,7 +877,11 @@ class MongoStore:
         return self._serialize_appointment(updated or {})
 
     def get_call_logs(self, limit: int = 100) -> list[dict[str, Any]]:
-        docs = list(self.call_logs.find({}).sort("created_at", -1).limit(limit))
+        docs = list(
+            self.call_logs.find({})
+            .sort([("updated_at", -1), ("created_at", -1)])
+            .limit(limit)
+        )
         return [self._serialize_call_log(doc) for doc in docs]
 
     def save_call_recording(
@@ -950,11 +959,17 @@ class MongoStore:
     def get_dashboard_summary(self) -> dict[str, Any]:
         total_appointments = self.appointments.count_documents({})
         active_doctors = self.doctors.count_documents({"status": "Available"})
+        today_start_utc, tomorrow_start_utc = pakistan_day_utc_bounds()
         calls_today = self.call_logs.count_documents(
-            {"created_at": {"$gte": datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)}}
+            {
+                "created_at": {
+                    "$gte": today_start_utc,
+                    "$lt": tomorrow_start_utc,
+                }
+            }
         )
 
-        today = datetime.now().date()
+        today = pakistan_today()
         doctors = {d.get("doctor_id"): d for d in self.get_doctors()}
         patients = {p.get("patient_id"): p for p in self.get_patients()}
 

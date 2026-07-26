@@ -870,6 +870,7 @@ class ConversationStateTests(unittest.TestCase):
                 "recording_mime": "audio/webm",
                 "recording_size": 1024,
                 "recording_duration_seconds": 93.417,
+                "updated_at": datetime(2026, 7, 26, 21, 15, tzinfo=APP_TZ),
             }
         )
 
@@ -878,6 +879,10 @@ class ConversationStateTests(unittest.TestCase):
         self.assertEqual(view["recording_duration_seconds"], 93.417)
         self.assertEqual(view["patient_name"], "علی")
         self.assertEqual(view["phone"], "03001234567")
+        self.assertEqual(
+            view["updated_at"],
+            datetime(2026, 7, 26, 21, 15, tzinfo=APP_TZ),
+        )
 
     def test_greeting_does_not_expose_backend_date_or_time(self):
         context = type(

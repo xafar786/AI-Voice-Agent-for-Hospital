@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Badge from "../components/Badge";
-import { api } from "../api/client";
+import { api, getPakistanDateKey } from "../api/client";
 
 function statusVariant(status) {
   const v = (status || "").toLowerCase();
@@ -20,15 +20,12 @@ function toDateKey(dateObj) {
   return `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, "0")}-${String(dateObj.getDate()).padStart(2, "0")}`;
 }
 
-function parseAppointmentDate(value) {
-  if (!value) return null;
+function appointmentDateKey(value) {
+  if (!value) return "";
   const text = String(value).trim();
   const first = text.split(" ")[0];
-  const fullDate = new Date(text);
-  if (!Number.isNaN(fullDate.getTime())) return fullDate;
-  const firstDate = new Date(first);
-  if (!Number.isNaN(firstDate.getTime())) return firstDate;
-  return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(first)) return first;
+  return getPakistanDateKey(text);
 }
 
 function parseScheduledFor(value) {
@@ -71,8 +68,8 @@ export default function Appointments() {
   const [editError, setEditError] = useState("");
   const [deletingId, setDeletingId] = useState("");
   const [calendarMonth, setCalendarMonth] = useState(() => {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), 1);
+    const [year, month] = getPakistanDateKey().split("-").map(Number);
+    return new Date(year, month - 1, 1);
   });
 
   async function loadAll() {
@@ -95,9 +92,8 @@ export default function Appointments() {
   const calendarData = useMemo(() => {
     const byDay = new Map();
     appointments.forEach((appt) => {
-      const parsed = parseAppointmentDate(appt.scheduled_for);
-      if (!parsed) return;
-      const key = toDateKey(parsed);
+      const key = appointmentDateKey(appt.scheduled_for);
+      if (!key) return;
       if (!byDay.has(key)) byDay.set(key, []);
       byDay.get(key).push(appt);
     });

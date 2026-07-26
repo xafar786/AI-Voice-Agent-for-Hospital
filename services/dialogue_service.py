@@ -3,16 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
-from zoneinfo import ZoneInfo
 import re
 
 from schemas import IntentResult
 from domain.doctor_matching import doctor_name_key, doctor_name_match_score, doctor_names_match
 from domain.phone_normalization import is_valid_phone_number
 from domain.symptom_routing import DEPARTMENT_SYMPTOMS, infer_department_from_symptoms
+from domain.timezone_utils import PAKISTAN_TZ
 
 
-APP_TZ = ZoneInfo("Asia/Karachi")
+APP_TZ = PAKISTAN_TZ
 WEEK_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 INITIAL_GREETING_URDU = (
     "السلام علیکم! میں شفا ہسپتال کا وائس اسسٹنٹ ہوں۔ "

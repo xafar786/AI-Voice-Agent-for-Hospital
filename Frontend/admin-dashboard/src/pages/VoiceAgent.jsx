@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api } from "../api/client";
+import { api, formatPakistanTime } from "../api/client";
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const FALLBACK_GREETING =
@@ -225,10 +225,7 @@ export default function VoiceAgent({ onBack = null }) {
     if (!finalTranscript || busyRef.current) return;
     const turnSessionId = sessionIdRef.current;
     let conversationEnded = false;
-    const messageTime = new Date().toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    const messageTime = formatPakistanTime();
     setHistory((prev) => [
       ...prev,
       {
@@ -265,10 +262,7 @@ export default function VoiceAgent({ onBack = null }) {
             id: crypto.randomUUID(),
             role: "agent",
             content: resp.assistant_text,
-            time: new Date().toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            }),
+            time: formatPakistanTime(),
             intent: resp.intent?.intent || "other",
           },
         ]);
@@ -375,10 +369,7 @@ export default function VoiceAgent({ onBack = null }) {
           id: crypto.randomUUID(),
           role: "agent",
           content: greetingText,
-          time: new Date().toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-          }),
+          time: formatPakistanTime(),
           intent: "greeting",
         },
       ]);
@@ -399,10 +390,7 @@ export default function VoiceAgent({ onBack = null }) {
           id: crypto.randomUUID(),
           role: "agent",
           content: greetingText,
-          time: new Date().toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-          }),
+          time: formatPakistanTime(),
           intent: "greeting",
         },
       ]);
