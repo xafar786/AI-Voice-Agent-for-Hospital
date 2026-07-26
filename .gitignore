@@ -5,3 +5,11 @@
 
 # Local speech-recognition model files are too large for GitHub.
 ASR/
+
+# Local environment files may contain credentials.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
